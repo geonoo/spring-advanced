@@ -1,34 +1,35 @@
-package com.example.advanced.app.trace;
+package com.example.advanced.app.trace.logtrace;
 
+import com.example.advanced.app.trace.TraceId;
+import com.example.advanced.app.trace.TraceStatus;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
 @Slf4j
-@Component
-public class HelloTraceV2 {
+public class ThreadLocalLogTrace implements LogTrace {
     private static final String START_PREFIX = "-->";
     private static final String COMPLETE_PREFIX = "<--";
     private static final String EX_PREFIX = "<X-";
+    private ThreadLocal<TraceId> traceIdHolder = new ThreadLocal<>();
+
+    @Override
     public TraceStatus begin(String message) {
-        TraceId traceId = new TraceId();
+        syncTraceId();
+        TraceId traceId = traceIdHolder.get();
         Long startTimeMs = System.currentTimeMillis();
-        log.info("[" + traceId.getId() + "] " + addSpace(START_PREFIX, traceId.getLevel()) + message);
+        log.info("[{}] {}{}", traceId.getId(), addSpace(START_PREFIX, traceId.getLevel()), message);
         return new TraceStatus(traceId, startTimeMs, message);
     }
-    //V2에서 추가
-    public TraceStatus beginSync(TraceId beforeTraceId, String message) {
-        TraceId nextId = beforeTraceId.createNextId();
-        Long startTimeMs = System.currentTimeMillis();
-        log.info("[" + nextId.getId() + "] " + addSpace(START_PREFIX,
-                nextId.getLevel()) + message);
-        return new TraceStatus(nextId, startTimeMs, message);
-    }
+
+    @Override
     public void end(TraceStatus status) {
         complete(status, null);
     }
+
+    @Override
     public void exception(TraceStatus status, Exception e) {
         complete(status, e);
     }
+
     private void complete(TraceStatus status, Exception e) {
         Long stopTimeMs = System.currentTimeMillis();
         long resultTimeMs = stopTimeMs - status.getStartTimeMs();
@@ -40,8 +41,29 @@ public class HelloTraceV2 {
             log.info("[{}] {}{} time={}ms ex={}", traceId.getId(),
                     addSpace(EX_PREFIX, traceId.getLevel()), status.getMessage(), resultTimeMs, e.toString());
         }
+        releaseTraceId();
     }
+
+    private void syncTraceId() {
+        TraceId traceId = traceIdHolder.get();
+        if (traceId == null) {
+            traceIdHolder.set(new TraceId());
+        } else {
+            traceIdHolder.set(traceId.createNextId());
+        }
+    }
+
+    private void releaseTraceId() {
+        TraceId traceId = traceIdHolder.get();
+        if (traceId.isFirstLevel()) {
+            traceIdHolder.remove();//destroy
+        } else {
+            traceIdHolder.set(traceId.createPreviousId());
+        }
+    }
+
     private static String addSpace(String prefix, int level) {
+
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < level; i++) {
             sb.append( (i == level - 1) ? "|" + prefix : "|   ");
